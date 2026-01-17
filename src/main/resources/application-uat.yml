@@ -1,0 +1,34 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: Temple Backend API - UAT
+  datasource:
+    url: jdbc:mysql://uat-db.example.com:3306/templedb_uat
+    username: ${DB_USER:templerootuat}
+    password: ${DB_PASSWORD:templerootuat123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        "[format_sql]": true
+
+jwt:
+  secret: ${JWT_SECRET:UATTempleSecretKeyForJWTAuthenticationWithSecurityLevel2024}
+  expiration: 86400000
+
+# Authentication Configuration for UAT Environment
+app:
+  auth:
+    enabled: true           # JWT enabled for UAT
+    basic-enabled: false    # Basic auth disabled for UAT
+
+logging:
+  level:
+    root: WARN
+    "[com.temple]": INFO
+    "[com.temple.security]": INFO

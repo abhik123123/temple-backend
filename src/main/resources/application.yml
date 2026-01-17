@@ -1,0 +1,52 @@
+
+spring:
+  profiles:
+    active: local
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: local
+  application:
+    name: Temple Backend API - Local Development
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+app:
+  auth:
+    enabled: false
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: uat
+  application:
+    name: Temple Backend API - UAT
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+app:
+  auth:
+    enabled: true
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: prod
+  application:
+    name: Temple Backend API - Production
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+app:
+  auth:
+    enabled: true
