@@ -5,124 +5,114 @@ import com.temple.dto.EventRegistrationResponse;
 import com.temple.entity.Event;
 import com.temple.entity.EventRegistration;
 import com.temple.entity.EventRegistrationMember;
+import com.temple.exception.BadRequestException;
+import com.temple.exception.NotFoundException;
 import com.temple.repository.EventRegistrationRepository;
 import com.temple.repository.EventRepository;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
-import java.util.stream.Collectors;
-
 @Service
+@Transactional
 public class EventRegistrationService {
 
     private static final Logger logger = LoggerFactory.getLogger(EventRegistrationService.class);
 
-    @Autowired
-    private EventRegistrationRepository registrationRepository;
+    public record RegistrationStats(Long eventId, long totalRegistrations, long totalMembers) {
+    }
 
-    @Autowired
-    private EventRepository eventRepository;
+    private final EventRegistrationRepository registrationRepository;
+    private final EventRepository eventRepository;
 
-    @Transactional
+    public EventRegistrationService(EventRegistrationRepository registrationRepository, EventRepository eventRepository) {
+        this.registrationRepository = registrationRepository;
+        this.eventRepository = eventRepository;
+    }
+
     public EventRegistrationResponse registerForEvent(EventRegistrationRequest request) {
-        logger.info("REGISTRATION_REQUEST | eventId={} | members={}",
-                   request.getEventId(), request.getMembers().size());
-
-        // Validate event exists
         Event event = eventRepository.findById(request.getEventId())
-            .orElseThrow(() -> new RuntimeException("Event not found with id: " + request.getEventId()));
-
-        // Validate at least one member
-        if (request.getMembers() == null || request.getMembers().isEmpty()) {
-            throw new RuntimeException("At least one member is required for registration");
+                .orElseThrow(() -> new NotFoundException("Event", request.getEventId()));
+        if (event.getEventDate() != null && event.getEventDate().isBefore(LocalDate.now())) {
+            throw new BadRequestException("Registration is closed for past events");
         }
 
-        // Create registration
         EventRegistration registration = EventRegistration.builder()
-            .event(event)
-            .status("CONFIRMED")
-            .build();
-
-        // Add members
-        List<EventRegistrationMember> members = request.getMembers().stream()
-            .map(memberDto -> EventRegistrationMember.builder()
-                .registration(registration)
-                .name(memberDto.getName())
-                .surname(memberDto.getSurname())
-                .address(memberDto.getAddress())
-                .phoneNo(memberDto.getPhoneNo())
-                .email(memberDto.getEmail())
-                .build())
-            .collect(Collectors.toList());
-
+                .event(event)
+                .status("CONFIRMED")
+                .build();
+        List<EventRegistrationMember> members = new ArrayList<>();
+        for (EventRegistrationRequest.MemberDetails m : request.getMembers()) {
+            members.add(EventRegistrationMember.builder()
+                    .registration(registration)
+                    .name(m.getName().trim())
+                    .surname(blankToNull(m.getSurname()))
+                    .address(blankToNull(m.getAddress()))
+                    .phoneNo(blankToNull(m.getPhoneNo()))
+                    .email(blankToNull(m.getEmail()))
+                    .build());
+        }
         registration.setMembers(members);
 
-        // Save registration
-        EventRegistration savedRegistration = registrationRepository.save(registration);
-
-        logger.info("REGISTRATION_SUCCESS | registrationId={} | eventId={} | totalMembers={}",
-                   savedRegistration.getId(), event.getId(), members.size());
-
-        return mapToResponse(savedRegistration);
+        EventRegistration saved = registrationRepository.save(registration);
+        logger.info("EVENT_REGISTRATION | registrationId={} | eventId={} | members={}",
+                saved.getId(), event.getId(), members.size());
+        return mapToResponse(saved);
     }
 
+    @Transactional(readOnly = true)
     public List<EventRegistrationResponse> getRegistrationsByEventId(Long eventId) {
-        logger.info("FETCH_REGISTRATIONS | eventId={}", eventId);
-        List<EventRegistration> registrations = registrationRepository.findByEventId(eventId);
-        return registrations.stream()
-            .map(this::mapToResponse)
-            .collect(Collectors.toList());
+        requireEvent(eventId);
+        return registrationRepository.findByEventId(eventId).stream().map(this::mapToResponse).toList();
     }
 
-    public EventRegistrationResponse getRegistrationById(Long id) {
-        logger.info("FETCH_REGISTRATION | id={}", id);
-        EventRegistration registration = registrationRepository.findById(id)
-            .orElseThrow(() -> new RuntimeException("Registration not found with id: " + id));
-        return mapToResponse(registration);
-    }
-
-    @Transactional
     public void cancelRegistration(Long id) {
-        logger.info("CANCEL_REGISTRATION | id={}", id);
         EventRegistration registration = registrationRepository.findById(id)
-            .orElseThrow(() -> new RuntimeException("Registration not found with id: " + id));
+                .orElseThrow(() -> new NotFoundException("Registration", id));
         registration.setStatus("CANCELLED");
-        registrationRepository.save(registration);
     }
 
-    public Long getRegistrationCountForEvent(Long eventId) {
-        return registrationRepository.countByEventId(eventId);
+    @Transactional(readOnly = true)
+    public RegistrationStats stats(Long eventId) {
+        requireEvent(eventId);
+        Long registrations = registrationRepository.countActiveByEventId(eventId);
+        Long members = registrationRepository.totalActiveMembersByEventId(eventId);
+        return new RegistrationStats(eventId, registrations == null ? 0 : registrations, members == null ? 0 : members);
     }
 
-    public Integer getTotalMembersForEvent(Long eventId) {
-        return registrationRepository.getTotalMembersByEventId(eventId);
+    private void requireEvent(Long eventId) {
+        if (!eventRepository.existsById(eventId)) {
+            throw new NotFoundException("Event", eventId);
+        }
     }
 
     private EventRegistrationResponse mapToResponse(EventRegistration registration) {
         List<EventRegistrationResponse.MemberInfo> memberInfos = registration.getMembers().stream()
-            .map(member -> EventRegistrationResponse.MemberInfo.builder()
-                .id(member.getId())
-                .name(member.getName())
-                .surname(member.getSurname())
-                .address(member.getAddress())
-                .phoneNo(member.getPhoneNo())
-                .email(member.getEmail())
-                .build())
-            .collect(Collectors.toList());
-
+                .map(member -> EventRegistrationResponse.MemberInfo.builder()
+                        .id(member.getId())
+                        .name(member.getName())
+                        .surname(member.getSurname())
+                        .address(member.getAddress())
+                        .phoneNo(member.getPhoneNo())
+                        .email(member.getEmail())
+                        .build())
+                .toList();
         return EventRegistrationResponse.builder()
-            .id(registration.getId())
-            .eventId(registration.getEvent().getId())
-            .eventName(registration.getEvent().getEventName())
-            .registrationDate(registration.getRegistrationDate())
-            .totalMembers(registration.getTotalMembers())
-            .status(registration.getStatus())
-            .members(memberInfos)
-            .build();
+                .id(registration.getId())
+                .eventId(registration.getEvent().getId())
+                .eventName(registration.getEvent().getEventName())
+                .registrationDate(registration.getRegistrationDate())
+                .totalMembers(registration.getTotalMembers())
+                .status(registration.getStatus())
+                .members(memberInfos)
+                .build();
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 }
-

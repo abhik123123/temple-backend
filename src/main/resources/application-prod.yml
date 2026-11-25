@@ -1,48 +1,11 @@
-server:
-  port: 8080
-  servlet:
-    context-path: /api
-
+# Production: set SPRING_PROFILES_ACTIVE=prod and the variables in .env.example.
 spring:
-  application:
-    name: Temple Backend API - Production
   datasource:
-    url: jdbc:mysql://prod-db.example.com:3306/templedb_prod
-    username: ${DB_USER}
-    password: ${DB_PASSWORD}
-    driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 20
+      maximum-pool-size: ${DB_POOL_SIZE:20}
       minimum-idle: 5
-      connection-timeout: 30000
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    properties:
-      hibernate:
-        "[format_sql]": false
-
-jwt:
-  secret: ${JWT_SECRET}
-  expiration: 86400000
-
-# Authentication Configuration for Production Environment
-app:
-  auth:
-    enabled: true           # JWT REQUIRED for Production
-    basic-enabled: false    # Basic auth disabled for Production - SECURITY
 
 logging:
   level:
-    root: ERROR
-    "[com.temple]": WARN
-    "[com.temple.security]": INFO
-    enabled: true
-
-logging:
-  level:
-    root: ERROR
-    "[com.temple]": WARN
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    root: WARN
+    com.temple: INFO

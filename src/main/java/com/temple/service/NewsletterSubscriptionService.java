@@ -1,229 +1,181 @@
 package com.temple.service;
 
+import com.temple.config.AppProperties;
 import com.temple.entity.EmailSubscription;
 import com.temple.entity.SubscriptionLog;
 import com.temple.repository.EmailSubscriptionRepository;
 import com.temple.repository.SubscriptionLogRepository;
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
 @Service
 @Slf4j
+@Transactional
 public class NewsletterSubscriptionService {
 
-    @Autowired
-    private EmailSubscriptionRepository subscriptionRepository;
+    /** Admin list row. Never includes the unsubscribe token. */
+    public record SubscriberView(Long id, String email, String fullName, String status,
+                                 LocalDateTime subscribedAt, LocalDateTime unsubscribedAt, LocalDateTime lastSentDate) {
+        static SubscriberView from(EmailSubscription s) {
+            return new SubscriberView(s.getId(), s.getEmail(), s.getFullName(),
+                    Boolean.TRUE.equals(s.getIsActive()) ? "ACTIVE" : "UNSUBSCRIBED",
+                    s.getSubscribedAt(), s.getUnsubscribedAt(), s.getLastSentAt());
+        }
+    }
 
-    @Autowired
-    private SubscriptionLogRepository logRepository;
+    private final EmailSubscriptionRepository subscriptionRepository;
+    private final SubscriptionLogRepository logRepository;
+    private final EmailService emailService;
+    private final AppProperties properties;
 
-    @Autowired
-    private EmailService emailService;
+    public NewsletterSubscriptionService(EmailSubscriptionRepository subscriptionRepository,
+                                         SubscriptionLogRepository logRepository,
+                                         EmailService emailService, AppProperties properties) {
+        this.subscriptionRepository = subscriptionRepository;
+        this.logRepository = logRepository;
+        this.emailService = emailService;
+        this.properties = properties;
+    }
 
-    /**
-     * Subscribe a new user to the newsletter
-     * @return Subscription object or null if email already exists
-     */
-    @Transactional
-    public EmailSubscription subscribe(String email, String fullName, String phone) {
-        try {
-            // Check if email already exists
-            Optional<EmailSubscription> existing = subscriptionRepository.findByEmail(email);
-            if (existing.isPresent()) {
-                EmailSubscription sub = existing.get();
-                if (sub.getIsActive()) {
-                    log.warn("SUBSCRIPTION_ALREADY_EXISTS | email={}", email);
-                    return null; // Already subscribed
-                } else {
-                    // Reactivate if previously unsubscribed
-                    sub.setIsActive(true);
-                    sub.setSubscribedAt(LocalDateTime.now());
-                    sub.setUnsubscribedAt(null);
-                    EmailSubscription updated = subscriptionRepository.save(sub);
-
-                    logAction(updated, "SUBSCRIBE", "User reactivated subscription");
-                    emailService.sendSubscriptionConfirmation(updated);
-
-                    log.info("SUBSCRIPTION_REACTIVATED | email={}", email);
-                    return updated;
-                }
-            }
-
-            // Create new subscription
-            EmailSubscription subscription = EmailSubscription.builder()
+    /** Idempotent: subscribing an address that is already active is a no-op; an unsubscribed one is re-activated. */
+    public EmailSubscription subscribe(String rawEmail, String fullName, String phone) {
+        String email = normalize(rawEmail);
+        EmailSubscription sub = subscriptionRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (sub != null && Boolean.TRUE.equals(sub.getIsActive())) {
+            return sub;
+        }
+        if (sub == null) {
+            sub = EmailSubscription.builder()
                     .email(email)
-                    .fullName(fullName)
-                    .phone(phone)
+                    .fullName(blankToNull(fullName))
+                    .phone(blankToNull(phone))
                     .isActive(true)
                     .preferences("{\"frequency\": \"weekly\", \"interests\": [\"events\", \"news\"]}")
                     .build();
-
-            EmailSubscription saved = subscriptionRepository.save(subscription);
-
-            // Log the subscription
-            logAction(saved, "SUBSCRIBE", "New subscription created");
-
-            // Send confirmation email
-            emailService.sendSubscriptionConfirmation(saved);
-
-            log.info("SUBSCRIPTION_CREATED | email={} | name={}", email, fullName);
-            return saved;
-
-        } catch (Exception e) {
-            log.error("SUBSCRIPTION_FAILED | email={} | error={}", email, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Unsubscribe a user from the newsletter
-     */
-    @Transactional
-    public boolean unsubscribe(String email) {
-        try {
-            Optional<EmailSubscription> subscription = subscriptionRepository.findByEmail(email);
-            if (subscription.isPresent()) {
-                EmailSubscription sub = subscription.get();
-                sub.setIsActive(false);
-                sub.setUnsubscribedAt(LocalDateTime.now());
-                subscriptionRepository.save(sub);
-
-                logAction(sub, "UNSUBSCRIBE", "User unsubscribed from newsletter");
-
-                log.info("SUBSCRIPTION_CANCELLED | email={}", email);
-                return true;
+        } else {
+            sub.setIsActive(true);
+            sub.setSubscribedAt(LocalDateTime.now());
+            sub.setUnsubscribedAt(null);
+            if (blankToNull(fullName) != null) {
+                sub.setFullName(fullName.trim());
             }
-            return false;
-        } catch (Exception e) {
-            log.error("UNSUBSCRIBE_FAILED | email={} | error={}", email, e.getMessage());
-            return false;
         }
+        EmailSubscription saved = subscriptionRepository.save(sub);
+        logAction(saved, "SUBSCRIBE", "Subscription activated");
+        emailService.sendSubscriptionConfirmation(saved);
+        return saved;
     }
 
-    /**
-     * Get all active subscriptions
-     */
-    public List<EmailSubscription> getAllActiveSubscriptions() {
-        return subscriptionRepository.findAllActiveSubscriptions();
+    /** Silently ignores unknown addresses so the endpoint can't be used to probe who is subscribed. */
+    public void unsubscribe(String rawEmail) {
+        subscriptionRepository.findByEmailIgnoreCase(normalize(rawEmail)).ifPresent(this::deactivate);
     }
 
-    /**
-     * Get subscription by email
-     */
-    public Optional<EmailSubscription> getSubscriptionByEmail(String email) {
-        return subscriptionRepository.findByEmail(email);
+    public boolean unsubscribeByToken(String token) {
+        return subscriptionRepository.findByUnsubscribeToken(token).map(s -> {
+            deactivate(s);
+            return true;
+        }).orElse(false);
     }
 
-    /**
-     * Get subscription count
-     */
-    public long getActiveSubscriptionCount() {
-        return subscriptionRepository.countActiveSubscriptions();
+    @Transactional(readOnly = true)
+    public List<SubscriberView> list(int page, int size) {
+        return subscriptionRepository.findAllByOrderBySubscribedAtDesc(PageRequest.of(page, size))
+                .map(SubscriberView::from).getContent();
     }
 
-    /**
-     * Get subscription statistics
-     */
+    @Transactional(readOnly = true)
     public Map<String, Object> getSubscriptionStats() {
-        Map<String, Object> stats = new HashMap<>();
-        stats.put("totalActiveSubscriptions", getActiveSubscriptionCount());
-        stats.put("totalSubscriptions", subscriptionRepository.count());
+        long active = subscriptionRepository.countActiveSubscriptions();
+        long total = subscriptionRepository.count();
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("totalSubscribers", total);
+        stats.put("activeSubscribers", active);
+        stats.put("unsubscribed", total - active);
         stats.put("successfulEmailsSent", logRepository.countSuccessfulEmails());
         stats.put("failedEmails", logRepository.countFailedEmails());
+        stats.put("emailConfigured", emailService.isConfigured());
         return stats;
     }
 
-    /**
-     * Get subscription logs for a specific subscription
-     */
+    @Transactional(readOnly = true)
     public List<SubscriptionLog> getSubscriptionLogs(Long subscriptionId) {
-        Optional<EmailSubscription> subscription = subscriptionRepository.findById(subscriptionId);
-        if (subscription.isPresent()) {
-            return logRepository.findBySubscription(subscription.get());
-        }
-        return List.of();
+        return subscriptionRepository.findById(subscriptionId)
+                .map(logRepository::findBySubscription)
+                .orElse(List.of());
     }
 
-    /**
-     * Log subscription action
-     */
-    @Transactional
+    public EmailSubscription updatePreferences(Long subscriptionId, String preferences) {
+        EmailSubscription sub = subscriptionRepository.findById(subscriptionId)
+                .orElseThrow(() -> new com.temple.exception.NotFoundException("Subscription", subscriptionId));
+        sub.setPreferences(preferences);
+        return sub;
+    }
+
+    @Transactional(readOnly = true)
+    public void sendTestEmail(String email) {
+        emailService.sendTestEmail(normalize(email));
+    }
+
+    /** Weekly digest; runs only when NEWSLETTER_ENABLED=true (default: Sundays 02:00 IST). */
+    @Scheduled(cron = "${app.newsletter.cron}", zone = "${app.newsletter.zone}")
+    public void scheduledWeeklyNewsletter() {
+        if (!properties.newsletter().enabled()) {
+            return;
+        }
+        sendWeeklyNewsletter();
+    }
+
+    /** Sends the digest to all active subscribers now; returns {sent, failed}. */
+    public Map<String, Integer> sendWeeklyNewsletter() {
+        int sent = 0;
+        int failed = 0;
+        for (EmailSubscription subscription : subscriptionRepository.findAllActiveSubscriptions()) {
+            try {
+                if (emailService.sendWeeklyNewsletter(subscription)) {
+                    subscription.setLastSentAt(LocalDateTime.now());
+                    sent++;
+                } else {
+                    failed++;
+                }
+            } catch (RuntimeException e) {
+                log.error("NEWSLETTER_SEND_ERROR | subscriptionId={} | error={}", subscription.getId(), e.getMessage());
+                failed++;
+            }
+        }
+        log.info("WEEKLY_NEWSLETTER_DONE | sent={} | failed={}", sent, failed);
+        return Map.of("sent", sent, "failed", failed);
+    }
+
+    private void deactivate(EmailSubscription sub) {
+        if (Boolean.TRUE.equals(sub.getIsActive())) {
+            sub.setIsActive(false);
+            sub.setUnsubscribedAt(LocalDateTime.now());
+            logAction(sub, "UNSUBSCRIBE", "Unsubscribed");
+        }
+    }
+
     private void logAction(EmailSubscription subscription, String actionType, String details) {
-        SubscriptionLog log = SubscriptionLog.builder()
+        logRepository.save(SubscriptionLog.builder()
                 .subscription(subscription)
                 .actionType(actionType)
                 .details(details)
-                .build();
-        logRepository.save(log);
+                .build());
     }
 
-    /**
-     * Scheduled task: Send weekly newsletter every Sunday at 2:00 AM IST (8:30 PM UTC Saturday)
-     * Cron: 0 30 20 ? * SAT
-     */
-    @Scheduled(cron = "0 30 20 ? * SAT", zone = "UTC")
-    @Transactional
-    public void sendWeeklyNewsletter() {
-        log.info("WEEKLY_NEWSLETTER_JOB_STARTED");
-
-        try {
-            List<EmailSubscription> activeSubscriptions = getAllActiveSubscriptions();
-            log.info("SENDING_NEWSLETTERS | count={}", activeSubscriptions.size());
-
-            int successCount = 0;
-            int failureCount = 0;
-
-            for (EmailSubscription subscription : activeSubscriptions) {
-                try {
-                    boolean sent = emailService.sendWeeklyNewsletter(subscription);
-                    if (sent) {
-                        successCount++;
-                    } else {
-                        failureCount++;
-                    }
-                } catch (Exception e) {
-                    log.error("NEWSLETTER_SEND_ERROR | email={} | error={}", subscription.getEmail(), e.getMessage());
-                    failureCount++;
-                }
-            }
-
-            log.info("WEEKLY_NEWSLETTER_JOB_COMPLETED | success={} | failed={}", successCount, failureCount);
-
-        } catch (Exception e) {
-            log.error("WEEKLY_NEWSLETTER_JOB_FAILED | error={}", e.getMessage());
-        }
+    private static String normalize(String email) {
+        return email.trim().toLowerCase(Locale.ROOT);
     }
 
-    /**
-     * Alternative: Send weekly newsletter at a fixed time (2:00 AM IST every Sunday)
-     * Using initialDelay and fixedDelay instead of cron for better control
-     * Uncomment if cron doesn't work in your timezone
-     */
-    // @Scheduled(cron = "0 0 2 ? * SUN", zone = "Asia/Kolkata")
-    // public void sendWeeklyNewsletterIST() {
-    //     sendWeeklyNewsletter();
-    // }
-
-    /**
-     * Update subscription preferences
-     */
-    @Transactional
-    public EmailSubscription updatePreferences(Long subscriptionId, String preferences) {
-        Optional<EmailSubscription> subscription = subscriptionRepository.findById(subscriptionId);
-        if (subscription.isPresent()) {
-            EmailSubscription sub = subscription.get();
-            sub.setPreferences(preferences);
-            return subscriptionRepository.save(sub);
-        }
-        return null;
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 }
-

@@ -15,7 +15,8 @@ public class Sponsorship {
     private Long id;
     
     private String donorName;
-    private Double amount;
+    @Column(precision = 12, scale = 2)
+    private java.math.BigDecimal amount;
     private String purpose;
     private LocalDate date;
     private String status;

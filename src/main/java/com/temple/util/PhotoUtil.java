@@ -1,100 +1,63 @@
 package com.temple.util;
 
-import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
-import java.util.Base64;
+import java.io.InputStream;
+import java.util.Optional;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Utility class for photo handling and storage
- * Supports ALL image formats: JPEG, JPG, PNG, WebP, GIF, BMP, SVG, TIFF, ICO, and more
+ * Image validation. The type is decided from the file's magic bytes, never
+ * from the client-supplied Content-Type or file name, so HTML/SVG/scripts
+ * disguised as images are rejected (they would otherwise be served back from
+ * our origin and executed in visitors' browsers).
  */
-public class PhotoUtil {
+public final class PhotoUtil {
 
-    // Supported image formats (comprehensive list)
-    private static final String[] SUPPORTED_FORMATS = {
-        "image/jpeg",      // JPEG/JPG
-        "image/png",       // PNG
-        "image/webp",      // WebP
-        "image/gif",       // GIF
-        "image/bmp",       // BMP
-        "image/svg+xml",   // SVG
-        "image/tiff",      // TIFF
-        "image/x-icon",    // ICO
-        "image/vnd.microsoft.icon", // ICO (alternative)
-        "image/x-ms-bmp",  // BMP (alternative)
-        "image/jpg"        // JPG (alternative)
-    };
-
-    /**
-     * Get list of supported image MIME types
-     */
-    public static String[] getSupportedFormats() {
-        return SUPPORTED_FORMATS;
+    private PhotoUtil() {
     }
 
-    /**
-     * Get human-readable list of supported formats
-     */
     public static String getSupportedFormatsString() {
-        return "JPEG, JPG, PNG, WebP, GIF, BMP, SVG, TIFF, ICO";
+        return "JPEG, PNG, WebP, GIF";
     }
 
-    /**
-     * Convert MultipartFile to Base64 string
-     */
-    public static String convertToBase64(MultipartFile file) throws IOException {
+    /** @return the real MIME type (image/jpeg, image/png, image/webp, image/gif) or empty if not a supported image */
+    public static Optional<String> detectImageMimeType(MultipartFile file) {
         if (file == null || file.isEmpty()) {
-            return null;
+            return Optional.empty();
         }
-        return Base64.getEncoder().encodeToString(file.getBytes());
-    }
-
-    /**
-     * Validate image file
-     */
-    public static boolean isValidImageFile(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            return false;
+        byte[] h = new byte[12];
+        int read;
+        try (InputStream in = file.getInputStream()) {
+            read = in.readNBytes(h, 0, h.length);
+        } catch (IOException e) {
+            return Optional.empty();
         }
-
-        String contentType = file.getContentType();
-        return contentType != null && (
-                contentType.equals("image/jpeg") ||
-                contentType.equals("image/png") ||
-                contentType.equals("image/gif") ||
-                contentType.equals("image/webp")
-        );
-    }
-
-    /**
-     * Get MIME type from file
-     */
-    public static String getMimeType(MultipartFile file) {
-        return file != null ? file.getContentType() : null;
-    }
-
-    /**
-     * Get file size
-     */
-    public static long getFileSize(MultipartFile file) {
-        return file != null ? file.getSize() : 0;
-    }
-
-    /**
-     * Generate photo URL
-     */
-    public static String generatePhotoUrl(String entityType, Long entityId, String fileName) {
-        return "/api/photos/download/" + entityType + "/" + entityId + "/" + fileName;
-    }
-
-    /**
-     * Convert Base64 to byte array
-     */
-    public static byte[] convertBase64ToBytes(String base64String) {
-        if (base64String == null || base64String.isEmpty()) {
-            return null;
+        if (read >= 3 && (h[0] & 0xFF) == 0xFF && (h[1] & 0xFF) == 0xD8 && (h[2] & 0xFF) == 0xFF) {
+            return Optional.of("image/jpeg");
         }
-        return Base64.getDecoder().decode(base64String);
+        if (read >= 8 && (h[0] & 0xFF) == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G'
+                && h[4] == 0x0D && h[5] == 0x0A && h[6] == 0x1A && h[7] == 0x0A) {
+            return Optional.of("image/png");
+        }
+        if (read >= 12 && h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F'
+                && h[8] == 'W' && h[9] == 'E' && h[10] == 'B' && h[11] == 'P') {
+            return Optional.of("image/webp");
+        }
+        if (read >= 6 && h[0] == 'G' && h[1] == 'I' && h[2] == 'F' && h[3] == '8'
+                && (h[4] == '7' || h[4] == '9') && h[5] == 'a') {
+            return Optional.of("image/gif");
+        }
+        return Optional.empty();
+    }
+
+    /** Strips path components and unsafe characters from an uploaded file name (used for display only). */
+    public static String safeFileName(String original) {
+        if (original == null || original.isBlank()) {
+            return "photo";
+        }
+        String name = original.replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1);
+        name = name.replaceAll("[^A-Za-z0-9._ -]", "_");
+        return name.length() > 100 ? name.substring(name.length() - 100) : name;
     }
 }
-

@@ -1,144 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logs go to stdout only (12-factor): Docker, CloudWatch or any log shipper
+  collects them from there. Levels are set in application*.yml.
+  Never enable org.hibernate.orm.jdbc.bind TRACE in production: it logs query
+  parameters, including password hashes and devotees' personal data.
+-->
 <configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
 
-    <!-- Properties for CloudWatch -->
-    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
-    <property name="JSON_PATTERN" value='{"timestamp":"%d{yyyy-MM-dd HH:mm:ss.SSS}","level":"%level","thread":"%thread","logger":"%logger","method":"%method","line":"%line","message":"%msg","exception":"%ex{full}"}%n'/>
-
-    <!-- Console Appender - Human Readable -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${LOG_PATTERN}</pattern>
-        </encoder>
-    </appender>
-
-    <!-- Console JSON Appender - For CloudWatch -->
-    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${JSON_PATTERN}</pattern>
-        </encoder>
-    </appender>
-
-    <!-- Application Log File - JSON Format for CloudWatch -->
-    <appender name="APP_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/temple-backend.log</file>
-        <encoder>
-            <pattern>{"timestamp":"%d{yyyy-MM-dd HH:mm:ss.SSS}","level":"%level","thread":"%thread","logger":"%logger{40}","class":"%class","method":"%method","line":"%line","message":"%replace(%msg){'[\r\n]+', ' '}","mdc":"%mdc"}%n</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/archive/temple-backend-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>30</maxHistory>
-            <totalSizeCap>1GB</totalSizeCap>
-        </rollingPolicy>
-    </appender>
-
-    <!-- Error Log File - JSON with Full Stack Traces -->
-    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/error.log</file>
-        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-            <level>ERROR</level>
-        </filter>
-        <encoder>
-            <pattern>{"timestamp":"%d{yyyy-MM-dd HH:mm:ss.SSS}","level":"%level","thread":"%thread","logger":"%logger","class":"%class","method":"%method","line":"%line","message":"%replace(%msg){'[\r\n]+', ' '}","exception":"%replace(%ex{full}){'[\r\n]+', '\\n'}","mdc":"%mdc"}%n</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/archive/error-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>60</maxHistory>
-        </rollingPolicy>
-    </appender>
-
-    <!-- API Request/Response Log - Structured JSON -->
-    <appender name="API_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/api-requests.log</file>
-        <encoder>
-            <pattern>{"timestamp":"%d{yyyy-MM-dd HH:mm:ss.SSS}","level":"%level","endpoint":"%X{endpoint}","method":"%X{httpMethod}","statusCode":"%X{statusCode}","duration":"%X{duration}","user":"%X{user}","message":"%msg"}%n</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/archive/api-requests-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>30</maxHistory>
-        </rollingPolicy>
-    </appender>
-
-    <!-- Database Operations Log File -->
-    <appender name="DB_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/database.log</file>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] - %msg%n</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/archive/database-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>15</maxHistory>
-        </rollingPolicy>
-    </appender>
-
-    <!-- Security/Auth Log File -->
-    <appender name="SECURITY_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/security.log</file>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} - %msg%n</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/archive/security-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>90</maxHistory>
-        </rollingPolicy>
-    </appender>
-
-    <!-- Data Initialization Log -->
-    <appender name="DATA_INIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/data-initialization.log</file>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} - %msg%n</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/archive/data-init-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>15</maxHistory>
-        </rollingPolicy>
-    </appender>
-
-    <!-- Logger for API Controllers -->
-    <logger name="com.temple.controller" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="APP_FILE"/>
-        <appender-ref ref="API_FILE"/>
-    </logger>
-
-    <!-- Logger for Services -->
-    <logger name="com.temple.service" level="DEBUG" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="APP_FILE"/>
-    </logger>
-
-    <!-- Logger for Data Initialization -->
-    <logger name="com.temple.component.DataInitializer" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="DATA_INIT_FILE"/>
-    </logger>
-
-    <!-- Logger for Security -->
-    <logger name="com.temple.security" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="SECURITY_FILE"/>
-    </logger>
-
-    <!-- Hibernate/JPA SQL Logging -->
-    <logger name="org.hibernate.SQL" level="DEBUG" additivity="false">
-        <appender-ref ref="DB_FILE"/>
-    </logger>
-
-    <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="TRACE" additivity="false">
-        <appender-ref ref="DB_FILE"/>
-    </logger>
-
-    <!-- Spring Framework -->
-    <logger name="org.springframework" level="INFO"/>
-    <logger name="org.springframework.web" level="INFO"/>
-
-    <!-- Root Logger -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="APP_FILE"/>
-        <appender-ref ref="ERROR_FILE"/>
     </root>
-
 </configuration>
-

@@ -6,8 +6,11 @@ import com.temple.entity.SubscriptionLog;
 import com.temple.repository.SubscriptionLogRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import com.temple.config.AppProperties;
+import com.temple.exception.ServiceUnavailableException;
+import org.springframework.mail.MailException;
 import org.springframework.mail.SimpleMailMessage;
+import org.springframework.web.util.HtmlUtils;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
@@ -30,8 +33,48 @@ public class EmailService {
     @Autowired
     private EventService eventService;
 
-    @Value("${spring.mail.username:noreply@rajarajeshwara.com}")
-    private String fromEmail;
+    @Autowired
+    private AppProperties properties;
+
+    private String fromEmail() {
+        return properties.newsletter().from();
+    }
+
+    private String unsubscribeUrl(EmailSubscription subscription) {
+        return properties.newsletter().siteUrl().replaceAll("/+$", "")
+                + "/api/subscriptions/unsubscribe?token=" + subscription.getUnsubscribeToken();
+    }
+
+    private static String esc(String value) {
+        return value == null ? "" : HtmlUtils.htmlEscape(value);
+    }
+
+    private static String greetingName(EmailSubscription subscription) {
+        String name = subscription.getFullName();
+        return name == null || name.isBlank() ? "Devotee" : esc(name.trim());
+    }
+
+    public boolean isConfigured() {
+        return mailSender != null;
+    }
+
+    /** Plain-text test message used by the admin screen to verify SMTP settings. */
+    public void sendTestEmail(String to) {
+        if (mailSender == null) {
+            throw new ServiceUnavailableException("Email is not configured on the server");
+        }
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromEmail());
+        message.setTo(to);
+        message.setSubject("Test email from the temple website");
+        message.setText("This is a test message. If you received it, newsletter email delivery is working.");
+        try {
+            mailSender.send(message);
+        } catch (MailException e) {
+            log.warn("TEST_EMAIL_FAILED | error={}", e.getMessage());
+            throw new ServiceUnavailableException("Could not send email. Please check the mail server settings.");
+        }
+    }
 
     /**
      * Send HTML email with temple events for the week
@@ -43,13 +86,15 @@ public class EmailService {
                 return false;
             }
 
-            List<Event> upcomingEvents = eventService.getAllEvents();
+            List<Event> upcomingEvents = eventService.getEvents(true).stream()
+                    .filter(e -> e.getEventDate() != null && !e.getEventDate().isAfter(LocalDate.now().plusDays(14)))
+                    .toList();
             String htmlContent = buildNewsletterHtml(subscription, upcomingEvents);
 
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail());
             helper.setTo(subscription.getEmail());
             helper.setSubject("🏛️ Raja Rajeshwara Temple - Weekly Events Newsletter");
             helper.setText(htmlContent, true);
@@ -68,7 +113,7 @@ public class EmailService {
             log.info("NEWSLETTER_SENT | email={} | eventCount={}", subscription.getEmail(), upcomingEvents.size());
             return true;
 
-        } catch (MessagingException e) {
+        } catch (MessagingException | MailException e) {
             log.error("NEWSLETTER_SEND_FAILED | email={} | error={}", subscription.getEmail(), e.getMessage());
 
             // Log failure
@@ -117,14 +162,14 @@ public class EmailService {
         html.append("</div>\n");
 
         // Greeting
-        html.append("<p>Dear ").append(subscription.getFullName()).append(",</p>\n");
+        html.append("<p>Dear ").append(greetingName(subscription)).append(",</p>\n");
         html.append("<p>Namaste! Here are the upcoming events at Raja Rajeshwara Temple this week:</p>\n");
 
         // Events
         if (events != null && !events.isEmpty()) {
             for (Event event : events) {
                 html.append("<div class=\"event\">\n");
-                html.append("<div class=\"event-title\">").append(event.getEventName()).append("</div>\n");
+                html.append("<div class=\"event-title\">").append(esc(event.getEventName())).append("</div>\n");
                 if (event.getEventDate() != null) {
                     html.append("<div class=\"event-date\">📅 ")
                             .append(event.getEventDate().format(DateTimeFormatter.ofPattern("dd MMM yyyy")))
@@ -133,10 +178,10 @@ public class EmailService {
                             .append("</div>\n");
                 }
                 if (event.getLocation() != null) {
-                    html.append("<div class=\"event-details\">📍 Location: ").append(event.getLocation()).append("</div>\n");
+                    html.append("<div class=\"event-details\">📍 Location: ").append(esc(event.getLocation())).append("</div>\n");
                 }
                 if (event.getDescription() != null && !event.getDescription().isEmpty()) {
-                    html.append("<div class=\"event-details\">").append(event.getDescription()).append("</div>\n");
+                    html.append("<div class=\"event-details\">").append(esc(event.getDescription())).append("</div>\n");
                 }
                 html.append("</div>\n");
             }
@@ -148,8 +193,8 @@ public class EmailService {
         html.append("<div class=\"footer\">\n");
         html.append("<p>© 2025 Raja Rajeshwara Devastanam. All rights reserved.</p>\n");
         html.append("<p>📍 Near Old Market, Hasaparthy, Warangal | 📞 (555) 123-4567 | 📧 info@rajarajeshwara.com</p>\n");
-        html.append("<p><a class=\"unsubscribe\" href=\"http://localhost:8080/subscriptions/unsubscribe?email=")
-                .append(subscription.getEmail())
+        html.append("<p><a class=\"unsubscribe\" href=\"")
+                .append(esc(unsubscribeUrl(subscription)))
                 .append("\">Unsubscribe from newsletter</a></p>\n");
         html.append("</div>\n");
 
@@ -175,7 +220,7 @@ public class EmailService {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail());
             helper.setTo(subscription.getEmail());
             helper.setSubject("✅ Welcome to Raja Rajeshwara Temple Newsletter");
             helper.setText(htmlContent, true);
@@ -185,7 +230,7 @@ public class EmailService {
             log.info("SUBSCRIPTION_CONFIRMATION_SENT | email={}", subscription.getEmail());
             return true;
 
-        } catch (MessagingException e) {
+        } catch (MessagingException | MailException e) {
             log.error("SUBSCRIPTION_CONFIRMATION_FAILED | email={} | error={}", subscription.getEmail(), e.getMessage());
             return false;
         }
@@ -214,7 +259,7 @@ public class EmailService {
                 "<p style=\"margin: 10px 0; font-size: 16px;\">Newsletter Subscription Confirmed</p>\n" +
                 "</div>\n" +
                 "<div class=\"content\">\n" +
-                "<p>Namaste " + subscription.getFullName() + ",</p>\n" +
+                "<p>Namaste " + greetingName(subscription) + ",</p>\n" +
                 "<p>Thank you for subscribing to the Raja Rajeshwara Temple newsletter! You will now receive weekly updates about our events and activities.</p>\n" +
                 "<p><strong>What to Expect:</strong></p>\n" +
                 "<ul>\n" +
@@ -227,6 +272,7 @@ public class EmailService {
                 "<div class=\"footer\">\n" +
                 "<p>© 2025 Raja Rajeshwara Devastanam. All rights reserved.</p>\n" +
                 "<p>📍 Near Old Market, Hasaparthy, Warangal | 📞 (555) 123-4567</p>\n" +
+                "<p><a href=\"" + esc(unsubscribeUrl(subscription)) + "\">Unsubscribe</a></p>\n" +
                 "</div>\n" +
                 "</div>\n" +
                 "</body>\n" +

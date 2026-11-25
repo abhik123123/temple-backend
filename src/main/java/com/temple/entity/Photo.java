@@ -21,6 +21,8 @@ public class Photo {
 
     private Long relatedId; // ID of the related entity (event, staff, donor, board member)
 
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @ToString.Exclude
     @Column(columnDefinition = "TEXT")
     private String photoData; // Base64 encoded image data or file path
 

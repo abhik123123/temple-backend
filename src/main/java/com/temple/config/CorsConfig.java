@@ -1,32 +1,31 @@
 package com.temple.config;
 
-import com.temple.security.AuthInterceptor;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.time.Duration;
+import java.util.List;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
-import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/**
+ * CORS is only needed when the UI is served from a different origin than the
+ * API. With the recommended reverse-proxy setup (UI proxies /api) leave
+ * APP_CORS_ALLOWED_ORIGINS empty and cross-origin browser calls are refused.
+ */
 @Configuration
-public class CorsConfig implements WebMvcConfigurer {
-    
-    @Autowired
-    private AuthInterceptor authInterceptor;
+public class CorsConfig {
 
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/**")
-                .allowedOrigins("http://localhost:3000", "http://localhost:3001")
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*")
-                .allowCredentials(true)
-                .maxAge(3600);
-    }
-
-    @Override
-    public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(authInterceptor)
-                .addPathPatterns("/**")
-                .excludePathPatterns("/actuator/**", "/health/**");
+    @Bean
+    CorsConfigurationSource corsConfigurationSource(AppProperties properties) {
+        CorsConfiguration cors = new CorsConfiguration();
+        cors.setAllowedOrigins(properties.cors().allowedOrigins());
+        cors.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        cors.setAllowCredentials(false);
+        cors.setMaxAge(Duration.ofHours(1));
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", cors);
+        return source;
     }
 }

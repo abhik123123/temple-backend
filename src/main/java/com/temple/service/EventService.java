@@ -2,183 +2,98 @@ package com.temple.service;
 
 import com.temple.entity.Event;
 import com.temple.entity.Photo;
+import com.temple.exception.NotFoundException;
+import com.temple.repository.EventRegistrationRepository;
 import com.temple.repository.EventRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.time.LocalDate;
+import java.util.Comparator;
+import java.util.List;
 import org.springframework.stereotype.Service;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.IOException;
-import java.time.LocalDate;
-import java.util.List;
-import java.util.stream.Collectors;
-import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Events are kept after they happen (history, registrations, reports); the
+ * public site asks for {@code ?upcoming=true}. The old nightly job that
+ * deleted past events was removed: it destroyed history and failed as soon as
+ * an event had registrations.
+ */
 @Service
-@Slf4j
+@Transactional
 public class EventService {
 
-    private static final Logger logger = LoggerFactory.getLogger(EventService.class);
+    static final String PHOTO_TYPE = "events";
 
-    @Autowired
-    private EventRepository eventRepository;
+    private static final Comparator<Event> BY_DATE_AND_TIME = Comparator
+            .comparing(Event::getEventDate, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Event::getStartTime, Comparator.nullsFirst(Comparator.naturalOrder()));
 
-    @Autowired
-    private IntegratedPhotoService integratedPhotoService;
+    private final EventRepository eventRepository;
+    private final EventRegistrationRepository registrationRepository;
+    private final PhotoService photoService;
 
-    /**
-     * Get all events, automatically excluding past events
-     */
-    public List<Event> getAllEvents() {
+    public EventService(EventRepository eventRepository, EventRegistrationRepository registrationRepository,
+                        PhotoService photoService) {
+        this.eventRepository = eventRepository;
+        this.registrationRepository = registrationRepository;
+        this.photoService = photoService;
+    }
+
+    @Transactional(readOnly = true)
+    public List<Event> getEvents(boolean upcomingOnly) {
         LocalDate today = LocalDate.now();
-        List<Event> allEvents = eventRepository.findAll();
-        return allEvents.stream()
-                .filter(event -> event.getEventDate() != null && !event.getEventDate().isBefore(today))
-                .collect(Collectors.toList());
+        return eventRepository.findAll().stream()
+                .filter(e -> !upcomingOnly || (e.getEventDate() != null && !e.getEventDate().isBefore(today)))
+                .sorted(BY_DATE_AND_TIME)
+                .toList();
     }
 
-    public Event getEventById(Long id) {
-        return eventRepository.findById(id).orElse(null);
+    @Transactional(readOnly = true)
+    public Event getEvent(Long id) {
+        return eventRepository.findById(id).orElseThrow(() -> new NotFoundException("Event", id));
     }
 
-    /**
-     * Save event with optional photo upload
-     */
-    public Event saveEvent(Event event, MultipartFile photoFile, String uploadedBy) throws IOException {
-        logger.info("EVENT_CREATE_WITH_PHOTO | eventName={} | hasPhoto={}",
-                   event.getEventName(), photoFile != null && !photoFile.isEmpty());
-
-        // Save event first
-        Event savedEvent = eventRepository.save(event);
-        logger.debug("EVENT_SAVED | eventId={}", savedEvent.getId());
-
-        // Save photo if provided
-        if (photoFile != null && !photoFile.isEmpty()) {
-            try {
-                Photo photo = integratedPhotoService.savePhotoForEntity(
-                        "events",
-                        savedEvent.getId(),
-                        photoFile,
-                        uploadedBy,
-                        "Event photo - " + event.getEventName()
-                );
-
-                if (photo != null) {
-                    savedEvent.setImageUrl(photo.getPhotoUrl());
-                    eventRepository.save(savedEvent);
-                    logger.info("EVENT_PHOTO_SAVED | eventId={} | photoId={}", savedEvent.getId(), photo.getId());
-                }
-            } catch (IOException e) {
-                logger.error("EVENT_PHOTO_SAVE_FAILED | error={}", e.getMessage());
-                // Continue without photo - don't fail the event creation
-            }
+    public Event create(Event event, MultipartFile photoFile, String uploadedBy) {
+        event.setId(null);
+        event.setImageUrl(null);
+        if (event.getStatus() == null || event.getStatus().isBlank()) {
+            event.setStatus("Upcoming");
         }
-
-        return savedEvent;
+        Event saved = eventRepository.save(event);
+        attachPhoto(saved, photoFile, uploadedBy);
+        return saved;
     }
 
-    /**
-     * Overloaded method for backwards compatibility (without photo)
-     */
-    public Event saveEvent(Event event) {
-        try {
-            return saveEvent(event, null, "system");
-        } catch (IOException e) {
-            logger.error("EVENT_SAVE_ERROR | error={}", e.getMessage());
-            return eventRepository.save(event);
+    /** Copies editable fields onto the stored event, so an update without a photo keeps the existing one. */
+    public Event update(Long id, Event changes, MultipartFile photoFile, String uploadedBy) {
+        Event event = getEvent(id);
+        event.setEventName(changes.getEventName());
+        event.setDescription(changes.getDescription());
+        event.setEventDate(changes.getEventDate());
+        event.setStartTime(changes.getStartTime());
+        event.setEndTime(changes.getEndTime());
+        event.setLocation(changes.getLocation());
+        event.setCategory(changes.getCategory());
+        if (changes.getStatus() != null && !changes.getStatus().isBlank()) {
+            event.setStatus(changes.getStatus());
         }
+        attachPhoto(event, photoFile, uploadedBy);
+        return event;
     }
 
-    /**
-     * Update event with optional photo upload
-     */
-    public Event updateEvent(Long id, Event event, MultipartFile photoFile, String uploadedBy) throws IOException {
-        logger.info("EVENT_UPDATE_WITH_PHOTO | eventId={} | hasPhoto={}",
-                   id, photoFile != null && !photoFile.isEmpty());
+    public void delete(Long id) {
+        Event event = getEvent(id);
+        registrationRepository.deleteAll(registrationRepository.findByEventId(id));
+        photoService.deleteForEntity(PHOTO_TYPE, id);
+        eventRepository.delete(event);
+    }
 
-        if (eventRepository.existsById(id)) {
-            event.setId(id);
-            Event updatedEvent = eventRepository.save(event);
-            logger.debug("EVENT_UPDATED | eventId={}", id);
-
-            // Update photo if provided
-            if (photoFile != null && !photoFile.isEmpty()) {
-                try {
-                    // Delete old photo
-                    integratedPhotoService.deletePhotoForEntity(id);
-
-                    // Save new photo
-                    Photo photo = integratedPhotoService.savePhotoForEntity(
-                            "events",
-                            id,
-                            photoFile,
-                            uploadedBy,
-                            "Event photo - " + event.getEventName()
-                    );
-
-                    if (photo != null) {
-                        updatedEvent.setImageUrl(photo.getPhotoUrl());
-                        eventRepository.save(updatedEvent);
-                        logger.info("EVENT_PHOTO_UPDATED | eventId={} | photoId={}", id, photo.getId());
-                    }
-                } catch (IOException e) {
-                    logger.error("EVENT_PHOTO_UPDATE_FAILED | error={}", e.getMessage());
-                    // Continue without photo update
-                }
-            }
-
-            return updatedEvent;
+    private void attachPhoto(Event event, MultipartFile photoFile, String uploadedBy) {
+        if (photoFile == null || photoFile.isEmpty()) {
+            return;
         }
-        return null;
-    }
-
-    /**
-     * Overloaded method for backwards compatibility (without photo)
-     */
-    public Event updateEvent(Long id, Event event) {
-        try {
-            return updateEvent(id, event, null, "system");
-        } catch (IOException e) {
-            logger.error("EVENT_UPDATE_ERROR | error={}", e.getMessage());
-            if (eventRepository.existsById(id)) {
-                event.setId(id);
-                return eventRepository.save(event);
-            }
-            return null;
-        }
-    }
-
-    /**
-     * Delete event (also deletes associated photos)
-     */
-    public void deleteEvent(Long id) {
-        logger.info("EVENT_DELETE | eventId={}", id);
-        // Delete photos
-        integratedPhotoService.deletePhotoForEntity(id);
-        // Delete event
-        eventRepository.deleteById(id);
-    }
-
-    /**
-     * Scheduled task to automatically delete past events
-     * Runs every day at 00:00 (midnight)
-     */
-    @Scheduled(cron = "0 0 0 * * ?")
-    @Transactional
-    public void deleteExpiredEvents() {
-        try {
-            LocalDate today = LocalDate.now();
-            List<Event> pastEvents = eventRepository.findPastEvents(today);
-
-            if (!pastEvents.isEmpty()) {
-                int deletedCount = eventRepository.deletePastEvents(today);
-                log.info("✅ Auto-deleted {} past event(s)", deletedCount);
-            }
-        } catch (Exception e) {
-            log.error("❌ Error while deleting past events: ", e);
-        }
+        Photo photo = photoService.replaceForEntity(PHOTO_TYPE, event.getId(), photoFile, uploadedBy,
+                "Event photo - " + event.getEventName());
+        event.setImageUrl(photo.getPhotoUrl());
     }
 }
-

@@ -29,10 +29,9 @@ public class EventRegistrationMember {
     @Column(length = 500)
     private String address;
 
-    @Column(name = "phone_no", nullable = false)
+    @Column(name = "phone_no")
     private String phoneNo;
 
-    @Column(nullable = false)
     private String email;
 }
 

@@ -1,0 +1,12 @@
+spring:
+  jpa:
+    hibernate:
+      # Fails the test run if an entity and the Flyway schema drift apart.
+      ddl-auto: validate
+
+app:
+  security:
+    jwt-secret: dGVzdC1vbmx5LXNlY3JldC10ZXN0LW9ubHktc2VjcmV0LXRlc3Qtb25seS1zZWNyZXQ=
+  bootstrap-admin:
+    username: admin
+    password: test-admin-password

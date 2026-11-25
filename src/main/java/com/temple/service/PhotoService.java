@@ -1,124 +1,148 @@
 package com.temple.service;
 
+import com.temple.config.AppProperties;
 import com.temple.entity.Photo;
+import com.temple.exception.BadRequestException;
+import com.temple.exception.NotFoundException;
 import com.temple.repository.PhotoRepository;
+import com.temple.util.PhotoUtil;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.time.LocalDateTime;
+import java.util.Base64;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.IOException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Base64;
 
+/**
+ * Photos are stored base64-encoded in the {@code photos} table (simple to back
+ * up together with the database) and served by {@code GET /api/photos/{id}/content}.
+ * Photos are always scoped by (type, relatedId): the same numeric id is used
+ * by different entity types.
+ */
 @Service
+@Transactional
 public class PhotoService {
 
-    private static final Logger logger = LoggerFactory.getLogger(PhotoService.class);
+    public static final String ACTIVE = "Active";
+    public static final String DELETED = "Deleted";
 
-    @Autowired
-    private PhotoRepository photoRepository;
+    private static final Logger log = LoggerFactory.getLogger(PhotoService.class);
+    private static final Pattern SAFE_TYPE = Pattern.compile("^[a-z0-9_-]{1,40}$");
 
-    /**
-     * Upload photo for an entity (events, staff, donors, board members)
-     */
-    public Photo uploadPhoto(String photoType, Long relatedId, MultipartFile file, String uploadedBy, String description) throws IOException {
-        logger.info("PHOTO_UPLOAD_START | type={} | relatedId={} | uploadedBy={}", photoType, relatedId, uploadedBy);
+    private final PhotoRepository photoRepository;
+    private final long maxBytes;
 
-        try {
-            String photoName = file.getOriginalFilename();
-            String mimeType = file.getContentType();
-            long fileSize = file.getSize();
+    public PhotoService(PhotoRepository photoRepository, AppProperties properties) {
+        this.photoRepository = photoRepository;
+        this.maxBytes = properties.photos().maxBytes();
+    }
 
-            // Convert file to Base64
-            String photoData = Base64.getEncoder().encodeToString(file.getBytes());
+    public record PhotoContent(byte[] bytes, String mimeType) {
+    }
 
-            Photo photo = Photo.builder()
-                    .photoName(photoName)
-                    .photoType(photoType)
-                    .relatedId(relatedId)
-                    .photoData(photoData)
-                    .photoUrl("/api/photos/" + relatedId + "/" + photoType + "/" + photoName)
-                    .uploadedBy(uploadedBy)
-                    .uploadedDate(LocalDateTime.now())
-                    .status("Active")
-                    .description(description)
-                    .fileSize(fileSize)
-                    .mimeType(mimeType)
-                    .build();
-
-            Photo savedPhoto = photoRepository.save(photo);
-            logger.info("PHOTO_UPLOAD_SUCCESS | photoId={} | fileSize={}bytes", savedPhoto.getId(), fileSize);
-            return savedPhoto;
-
-        } catch (IOException e) {
-            logger.error("PHOTO_UPLOAD_ERROR | error={}", e.getMessage(), e);
-            throw new IOException("Failed to upload photo: " + e.getMessage());
+    /** Validates and stores an image, returning the saved photo with its public URL set. */
+    public Photo upload(String photoType, Long relatedId, MultipartFile file, String uploadedBy, String description) {
+        String type = normalizeType(photoType);
+        if (file == null || file.isEmpty()) {
+            throw new BadRequestException("Photo file is empty");
         }
+        if (file.getSize() > maxBytes) {
+            throw new BadRequestException("Photo is too large (max " + (maxBytes / (1024 * 1024)) + " MB)");
+        }
+        String mimeType = PhotoUtil.detectImageMimeType(file).orElseThrow(() ->
+                new BadRequestException("Unsupported image format. Allowed: " + PhotoUtil.getSupportedFormatsString()));
+        String data;
+        try {
+            data = Base64.getEncoder().encodeToString(file.getBytes());
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to read upload", e);
+        }
+        Photo photo = photoRepository.save(Photo.builder()
+                .photoName(PhotoUtil.safeFileName(file.getOriginalFilename()))
+                .photoType(type)
+                .relatedId(relatedId)
+                .photoData(data)
+                .uploadedBy(uploadedBy)
+                .uploadedDate(LocalDateTime.now())
+                .status(ACTIVE)
+                .description(description == null ? null : truncate(description, 255))
+                .fileSize(file.getSize())
+                .mimeType(mimeType)
+                .build());
+        photo.setPhotoUrl(contentUrl(photo.getId()));
+        log.info("PHOTO_SAVED | id={} | type={} | relatedId={} | bytes={}", photo.getId(), type, relatedId, file.getSize());
+        return photo;
     }
 
-    /**
-     * Get all photos for a specific type
-     */
-    public List<Photo> getPhotosByType(String photoType) {
-        logger.debug("PHOTO_FETCH_START | type={}", photoType);
-        return photoRepository.findByPhotoTypeAndStatus(photoType, "Active");
+    /** Replaces the photo of one entity: previous photos of the same (type, id) are marked deleted. */
+    public Photo replaceForEntity(String photoType, Long relatedId, MultipartFile file, String uploadedBy, String description) {
+        Photo saved = upload(photoType, relatedId, file, uploadedBy, description);
+        photoRepository.findByPhotoTypeAndRelatedId(normalizeType(photoType), relatedId).stream()
+                .filter(p -> !p.getId().equals(saved.getId()))
+                .forEach(p -> p.setStatus(DELETED));
+        return saved;
     }
 
-    /**
-     * Get photos for a specific entity
-     */
-    public List<Photo> getPhotosByRelatedId(Long relatedId) {
-        logger.debug("PHOTO_FETCH_START | relatedId={}", relatedId);
-        return photoRepository.findByRelatedId(relatedId);
+    public void deleteForEntity(String photoType, Long relatedId) {
+        photoRepository.findByPhotoTypeAndRelatedId(normalizeType(photoType), relatedId)
+                .forEach(p -> p.setStatus(DELETED));
     }
 
-    /**
-     * Get specific photo for entity
-     */
-    public List<Photo> getPhotosByTypeAndRelatedId(String photoType, Long relatedId) {
-        logger.debug("PHOTO_FETCH_START | type={} | relatedId={}", photoType, relatedId);
-        return photoRepository.findByPhotoTypeAndRelatedId(photoType, relatedId);
-    }
-
-    /**
-     * Delete/deactivate photo
-     */
-    public void deletePhoto(Long photoId) {
-        logger.info("PHOTO_DELETE_START | photoId={}", photoId);
-
+    @Transactional(readOnly = true)
+    public PhotoContent content(Long photoId) {
         Photo photo = photoRepository.findById(photoId)
-                .orElseThrow(() -> new RuntimeException("Photo not found"));
-
-        photo.setStatus("Deleted");
-        photoRepository.save(photo);
-
-        logger.info("PHOTO_DELETE_SUCCESS | photoId={}", photoId);
+                .filter(p -> ACTIVE.equals(p.getStatus()) && p.getPhotoData() != null)
+                .orElseThrow(() -> new NotFoundException("Photo", photoId));
+        return new PhotoContent(Base64.getDecoder().decode(photo.getPhotoData()),
+                photo.getMimeType() == null ? "application/octet-stream" : photo.getMimeType());
     }
 
-    /**
-     * Get photo by ID
-     */
-    public Photo getPhotoById(Long photoId) {
-        return photoRepository.findById(photoId)
-                .orElseThrow(() -> new RuntimeException("Photo not found with id: " + photoId));
+    @Transactional(readOnly = true)
+    public List<Photo> byType(String photoType) {
+        return photoRepository.findByPhotoTypeAndStatus(normalizeType(photoType), ACTIVE);
     }
 
-    /**
-     * Get all photos
-     */
-    public List<Photo> getAllPhotos() {
+    @Transactional(readOnly = true)
+    public List<Photo> byTypeAndRelatedId(String photoType, Long relatedId) {
+        return photoRepository.findByPhotoTypeAndRelatedId(normalizeType(photoType), relatedId).stream()
+                .filter(p -> ACTIVE.equals(p.getStatus())).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Photo> all() {
         return photoRepository.findAll();
     }
 
-    /**
-     * Update photo description
-     */
-    public Photo updatePhotoDescription(Long photoId, String description) {
-        Photo photo = getPhotoById(photoId);
-        photo.setDescription(description);
-        return photoRepository.save(photo);
+    public void delete(Long photoId) {
+        Photo photo = photoRepository.findById(photoId).orElseThrow(() -> new NotFoundException("Photo", photoId));
+        photo.setStatus(DELETED);
+    }
+
+    public Photo updateDescription(Long photoId, String description) {
+        Photo photo = photoRepository.findById(photoId).orElseThrow(() -> new NotFoundException("Photo", photoId));
+        photo.setDescription(description == null ? null : truncate(description, 255));
+        return photo;
+    }
+
+    public static String contentUrl(Long photoId) {
+        return "/api/photos/" + photoId + "/content";
+    }
+
+    private static String normalizeType(String photoType) {
+        String type = photoType == null ? "" : photoType.trim().toLowerCase(Locale.ROOT);
+        if (!SAFE_TYPE.matcher(type).matches()) {
+            throw new BadRequestException("Invalid photo type");
+        }
+        return type;
+    }
+
+    private static String truncate(String s, int max) {
+        return s.length() > max ? s.substring(0, max) : s;
     }
 }
-

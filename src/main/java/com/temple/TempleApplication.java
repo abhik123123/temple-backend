@@ -1,13 +1,16 @@
-
 package com.temple;
+
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
+@ConfigurationPropertiesScan
 @EnableScheduling
 public class TempleApplication {
-    public static void main(String[] args){
+
+    public static void main(String[] args) {
         SpringApplication.run(TempleApplication.class, args);
     }
 }

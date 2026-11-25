@@ -32,7 +32,7 @@ public class BoardMemberServiceService {
 
         try {
             BoardMember boardMember = boardMemberRepository.findById(boardMemberId)
-                    .orElseThrow(() -> new RuntimeException("Board member not found"));
+                    .orElseThrow(() -> new com.temple.exception.NotFoundException("Board member", boardMemberId));
 
             BoardMemberService service = BoardMemberService.builder()
                     .boardMember(boardMember)
@@ -75,7 +75,7 @@ public class BoardMemberServiceService {
      */
     public BoardMemberService getServiceById(Long serviceId) {
         return boardMemberServiceRepository.findById(serviceId)
-                .orElseThrow(() -> new RuntimeException("Service not found with id: " + serviceId));
+                .orElseThrow(() -> new com.temple.exception.NotFoundException("Board member service", serviceId));
     }
 
     /**

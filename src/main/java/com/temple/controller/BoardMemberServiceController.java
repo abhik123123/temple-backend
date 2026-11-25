@@ -12,7 +12,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/board-member-services")
+@RequestMapping("/board-member-services")
 public class BoardMemberServiceController {
 
     private static final Logger logger = LoggerFactory.getLogger(BoardMemberServiceController.class);
