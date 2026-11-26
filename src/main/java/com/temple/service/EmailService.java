@@ -192,7 +192,7 @@ public class EmailService {
         // Footer
         html.append("<div class=\"footer\">\n");
         html.append("<p>© 2025 Raja Rajeshwara Devastanam. All rights reserved.</p>\n");
-        html.append("<p>📍 Near Old Market, Hasaparthy, Warangal | 📞 (555) 123-4567 | 📧 info@rajarajeshwara.com</p>\n");
+        html.append("<p>📍 Near Old Market, Hasanparthy, Warangal | 📞 (555) 123-4567 | 📧 info@rajarajeshwara.com</p>\n");
         html.append("<p><a class=\"unsubscribe\" href=\"")
                 .append(esc(unsubscribeUrl(subscription)))
                 .append("\">Unsubscribe from newsletter</a></p>\n");
@@ -271,7 +271,7 @@ public class EmailService {
                 "</div>\n" +
                 "<div class=\"footer\">\n" +
                 "<p>© 2025 Raja Rajeshwara Devastanam. All rights reserved.</p>\n" +
-                "<p>📍 Near Old Market, Hasaparthy, Warangal | 📞 (555) 123-4567</p>\n" +
+                "<p>📍 Near Old Market, Hasanparthy, Warangal | 📞 (555) 123-4567</p>\n" +
                 "<p><a href=\"" + esc(unsubscribeUrl(subscription)) + "\">Unsubscribe</a></p>\n" +
                 "</div>\n" +
                 "</div>\n" +
