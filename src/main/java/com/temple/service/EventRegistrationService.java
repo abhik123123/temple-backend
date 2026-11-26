@@ -23,6 +23,10 @@ public class EventRegistrationService {
 
     private static final Logger logger = LoggerFactory.getLogger(EventRegistrationService.class);
 
+    /** What the public site may show: first name and surname initial, nothing else. */
+    public record PublicAttendees(Long eventId, long registrations, long people, List<String> names) {
+    }
+
     public record RegistrationStats(Long eventId, long totalRegistrations, long totalMembers) {
     }
 
@@ -39,6 +43,9 @@ public class EventRegistrationService {
                 .orElseThrow(() -> new NotFoundException("Event", request.getEventId()));
         if (event.getEventDate() != null && event.getEventDate().isBefore(LocalDate.now())) {
             throw new BadRequestException("Registration is closed for past events");
+        }
+        if (Boolean.FALSE.equals(event.getRegistrationOpen())) {
+            throw new BadRequestException("Registration is closed for this event");
         }
 
         EventRegistration registration = EventRegistration.builder()
@@ -74,6 +81,37 @@ public class EventRegistrationService {
         EventRegistration registration = registrationRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Registration", id));
         registration.setStatus("CANCELLED");
+    }
+
+    @Transactional(readOnly = true)
+    public PublicAttendees publicAttendees(Long eventId) {
+        Event event = eventRepository.findById(eventId)
+                .orElseThrow(() -> new NotFoundException("Event", eventId));
+        if (!Boolean.TRUE.equals(event.getAttendeeListPublic())) {
+            // Same answer as a missing list, so the switch state is not probed.
+            throw new NotFoundException("Attendee list for event", eventId);
+        }
+        List<EventRegistration> active = registrationRepository.findByEventId(eventId).stream()
+                .filter(r -> !"CANCELLED".equals(r.getStatus()))
+                .sorted(java.util.Comparator.comparing(EventRegistration::getRegistrationDate,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                .toList();
+        List<String> names = active.stream()
+                .flatMap(r -> r.getMembers().stream())
+                .map(m -> publicName(m.getName(), m.getSurname()))
+                .filter(n -> !n.isEmpty())
+                .toList();
+        return new PublicAttendees(eventId, active.size(), names.size(), names);
+    }
+
+    static String publicName(String name, String surname) {
+        String first = name == null ? "" : name.trim();
+        String last = surname == null ? "" : surname.trim();
+        if (last.isEmpty()) {
+            return first;
+        }
+        String initial = last.substring(0, last.offsetByCodePoints(0, 1)).toUpperCase();
+        return first.isEmpty() ? initial + "." : first + " " + initial + ".";
     }
 
     @Transactional(readOnly = true)

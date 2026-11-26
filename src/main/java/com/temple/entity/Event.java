@@ -67,6 +67,16 @@ public class Event {
     @Column(columnDefinition = "TEXT")
     private String imageUrl;
 
+    /** Devotees may register from the public site. */
+    @Column(name = "registration_open", nullable = false)
+    @Builder.Default
+    private Boolean registrationOpen = Boolean.TRUE;
+
+    /** The public site lists registrants' names (never contact details). */
+    @Column(name = "attendee_list_public", nullable = false)
+    @Builder.Default
+    private Boolean attendeeListPublic = Boolean.FALSE;
+
     @JsonIgnore
     @AssertTrue(message = "endTime must be after startTime")
     public boolean isTimeRangeValid() {

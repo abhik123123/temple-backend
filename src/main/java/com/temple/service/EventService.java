@@ -59,9 +59,27 @@ public class EventService {
         if (event.getStatus() == null || event.getStatus().isBlank()) {
             event.setStatus("Upcoming");
         }
+        if (event.getRegistrationOpen() == null) {
+            event.setRegistrationOpen(Boolean.TRUE);
+        }
+        if (event.getAttendeeListPublic() == null) {
+            event.setAttendeeListPublic(Boolean.FALSE);
+        }
         Event saved = eventRepository.save(event);
         attachPhoto(saved, photoFile, uploadedBy);
         return saved;
+    }
+
+    /** Flips the admin's per-event switches; a null value leaves that switch unchanged. */
+    public Event updateSettings(Long id, Boolean registrationOpen, Boolean attendeeListPublic) {
+        Event event = getEvent(id);
+        if (registrationOpen != null) {
+            event.setRegistrationOpen(registrationOpen);
+        }
+        if (attendeeListPublic != null) {
+            event.setAttendeeListPublic(attendeeListPublic);
+        }
+        return event;
     }
 
     /** Copies editable fields onto the stored event, so an update without a photo keeps the existing one. */
@@ -74,6 +92,12 @@ public class EventService {
         event.setEndTime(changes.getEndTime());
         event.setLocation(changes.getLocation());
         event.setCategory(changes.getCategory());
+        if (changes.getRegistrationOpen() != null) {
+            event.setRegistrationOpen(changes.getRegistrationOpen());
+        }
+        if (changes.getAttendeeListPublic() != null) {
+            event.setAttendeeListPublic(changes.getAttendeeListPublic());
+        }
         if (changes.getStatus() != null && !changes.getStatus().isBlank()) {
             event.setStatus(changes.getStatus());
         }

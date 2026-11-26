@@ -46,7 +46,7 @@ import org.springframework.security.web.util.matcher.RequestMatcher;
 public class SecurityConfig {
 
     static final String[] PUBLIC_GET = {
-        "/events", "/events/*",
+        "/events", "/events/*", "/events/*/attendees",
         "/services", "/services/*",
         "/staff", "/staff/*", "/staff/department/*",
         "/board-members", "/board-members/*", "/board-members/department/*",

@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -88,6 +89,21 @@ public class EventController {
     @ResponseStatus(HttpStatus.CREATED)
     public EventRegistrationResponse register(@Valid @RequestBody EventRegistrationRequest request) {
         return registrationService.registerForEvent(request);
+    }
+
+    /** Public, and only when the admin has switched the list on: registrants' names, no contact details. */
+    @GetMapping("/{id}/attendees")
+    public EventRegistrationService.PublicAttendees attendees(@PathVariable Long id) {
+        return registrationService.publicAttendees(id);
+    }
+
+    public record EventSettings(Boolean registrationOpen, Boolean attendeeListPublic) {
+    }
+
+    /** Admin: flip the per-event registration switches without resending the whole event. */
+    @PatchMapping(value = "/{id}/settings", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Event updateSettings(@PathVariable Long id, @RequestBody EventSettings settings) {
+        return eventService.updateSettings(id, settings.registrationOpen(), settings.attendeeListPublic());
     }
 
     @GetMapping("/{id}/registrations")
