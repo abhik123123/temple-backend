@@ -13,9 +13,9 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: none            # schema is owned by Flyway (db/migration)
-    properties:
-      hibernate:
-        jdbc.time_zone: UTC
+    # No hibernate.jdbc.time_zone: LocalDate/LocalTime are calendar dates and
+    # temple wall-clock times (IST, the container's TZ) and must be stored as-is.
+    # Converting them to UTC shifted every darshan time by 5h30m in the database.
   flyway:
     enabled: true
     locations: classpath:db/migration
